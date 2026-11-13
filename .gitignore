@@ -1,0 +1,42 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Private runtime state and generated backups
+data/
+runtime/
+logs/
+config_back/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.sqlite3-shm
+*.sqlite3-wal
+*.log
+*.bak
+*.sync-tmp
+*.update-tmp
+.maibot-release.json
+.update_backups/
+.update_tmp/
+
+# Credentials and machine-local integration files
+.env
+.env.*
+!.env.example
+.nas-ssh/
+*.pem
+*.key
+
+# Packaged builds and editor files
+*.zip
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

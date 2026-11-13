@@ -1,0 +1,21 @@
+[plugin]
+enabled = true
+config_version = "1.0.0"
+
+[simulation]
+capture_private_reports = true
+allowed_user_ids = []
+ejaculate_ml = 3.0
+vaginal_fraction = 0.8
+uterine_fraction = 0.05
+vaginal_half_life_hours = 6.0
+uterine_half_life_hours = 24.0
+double_ovulation_probability = 0.05
+
+[pregnancy]
+auto_trigger_enabled = true
+trigger_probability = 0.2
+max_event_age_days = 7
+trigger_user_ids = []
+context_enabled = true
+context_user_ids = []
