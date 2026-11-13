@@ -5,7 +5,7 @@ import hashlib
 import json
 from datetime import date, datetime, timedelta
 
-NOTICE = '角色妊娠模拟：触发概率、角色状态与胎数是虚构设定，不是受孕概率、验孕结果或医学判断。'
+NOTICE = '妊娠状态由事件规则或手动登记产生，孕周和日期按起算日推算。配置概率不代表受孕率，登记状态不等于医学确认。'
 
 
 def initialize(store):
@@ -64,12 +64,12 @@ def attempt(store, report, cycle, settings, now):
 
 def set_manual(store, anchor_date, fetuses, note, now):
     if not isinstance(anchor_date,str) or len(anchor_date)!=10:
-        raise ValueError('请填写YYYY-MM-DD格式的模拟孕周起算日')
+        raise ValueError('请填写YYYY-MM-DD格式的孕周起算日')
     anchor = date.fromisoformat(anchor_date)
     if anchor > now.date() or (now.date()-anchor).days > 365:
-        raise ValueError('模拟孕周起算日须在今天及之前365天以内')
+        raise ValueError('孕周起算日须在今天及之前365天以内')
     if isinstance(fetuses,bool) or fetuses not in {1,2}:
-        raise ValueError('模拟胎数只能是1或2')
+        raise ValueError('胎数设定只能是1或2')
     if not isinstance(note,str) or len(note)>300:
         raise ValueError('角色状态备注限300字')
     with store.connect() as db:
@@ -92,9 +92,9 @@ def end(store, outcome, now):
         db.execute('BEGIN IMMEDIATE')
         current = _ongoing(_rows(db))
         if not current:
-            raise ValueError('当前没有进行中的妊娠或产后模拟')
+            raise ValueError('当前没有进行中的妊娠或产后状态')
         if current['status']=='postpartum' and outcome=='delivered':
-            raise ValueError('已进入产后模拟，请选择结束模拟')
+            raise ValueError('已进入产后阶段，请选择结束状态')
         current.update(status='postpartum' if outcome=='delivered' else 'ended',
                        ended_at=now.isoformat(),end_reason=outcome)
         _write(db,current)
@@ -117,19 +117,19 @@ def snapshot(store, now):
     weeks, remainder = divmod(days,7)
     if current['status']=='postpartum':
         postpartum = max(0,(now.date()-datetime.fromisoformat(current['ended_at']).date()).days)
-        phase, state_note = '产后模拟', '角色处于产后生活阶段，可按设定放慢节奏；具体感受以角色备注为准。'
+        phase, state_note = '产后阶段', '角色处于产后生活阶段，可按设定放慢节奏；具体感受以角色备注为准。'
     elif days >= 280:
         postpartum = None
-        phase,state_note = '等待手动结算','已到模拟预计日期，等待管理员决定后续剧情；不会自动模拟分娩或疾病。'
+        phase,state_note = '待登记分娩','已到预计分娩日期，等待登记后续状态；不会自动登记分娩或推断疾病。'
     elif days >= 196:
         postpartum = None
-        phase,state_note = '孕晚期模拟','角色生活节奏可以偏缓，更多关注日常舒适与休息。'
+        phase,state_note = '孕晚期','角色生活节奏可以偏缓，更多关注日常舒适与休息。'
     elif days >= 98:
         postpartum = None
-        phase,state_note = '孕中期模拟','角色进入中期生活阶段，保留独立日常，不强制出现任何症状。'
+        phase,state_note = '孕中期','角色进入中期生活阶段，保留独立日常，不强制出现任何症状。'
     else:
         postpartum = None
-        phase,state_note = '孕早期模拟','角色开始适应妊娠设定，可更重视休息；不默认出现恶心、疼痛或其他症状。'
+        phase,state_note = '孕早期','处于妊娠初期，生活节奏可以适度放缓，具体感受以状态备注为准；不默认出现任何症状。'
     base['current'] = {**current,'gestational_days':days,'weeks':weeks,'days':remainder,
                        'due_date':(anchor+timedelta(days=280)).isoformat(),'phase':phase,
                        'progress':min(100,round(days/280*100,1)), 'postpartum_days':postpartum,
@@ -142,11 +142,11 @@ def context_text(data):
     current = data.get('current')
     if not current:
         if data.get('latest_ended'):
-            return '【虚构角色妊娠模拟】该角色的妊娠模拟已结束，当前不在妊娠或产后模拟中。不要沿用此前的怀孕设定。'
+            return '【角色妊娠状态】该角色的妊娠状态已结束，当前不在妊娠或产后状态中。不要沿用此前的怀孕设定。'
         return ''
-    stage = f"产后模拟第{current['postpartum_days']}天" if current['status']=='postpartum' else f"模拟孕周{current['weeks']}周{current['days']}天，{current['phase']}"
-    text = (f"【虚构角色妊娠模拟】这是虚拟角色本人的设定，不是用户的身体状态或医学诊断。{stage}；"
-            f"模拟胎数{current['fetuses']}，模拟预计日期{current['due_date']}。{current['state_note']}"
+    stage = f"产后阶段第{current['postpartum_days']}天" if current['status']=='postpartum' else f"孕周{current['weeks']}周{current['days']}天，{current['phase']}"
+    text = (f"【角色妊娠状态】这是角色扮演背景，由程序规则登记，不是用户的身体状态或医学诊断。{stage}；"
+            f"胎数设定{current['fetuses']}，预计分娩日期{current['due_date']}。{current['state_note']}"
             '以此保持角色生活连续性，不每轮机械播报；此期间常规周期计算不代表当前排卵状态。'
             '不要编造检查结果、真实受孕概率或疾病，也不要透露私聊事件历史。')
     if current.get('note'):

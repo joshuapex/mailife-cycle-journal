@@ -22,20 +22,20 @@ class PluginSettings(PluginConfigBase):
 
 
 class SimulationSettings(PluginConfigBase):
-    __ui_label__ = "角色模拟与事件"
+    __ui_label__ = "身体状态与事件"
     capture_private_reports: bool = Field(default=True, description="识别私聊中第一人称、已发生的明确自述；忽略疑问、否定、假设、引用和群聊。不保存原始聊天文本。")
-    allowed_user_ids: list[str] = Field(default_factory=list, description="可记录的私聊用户ID；空列表允许所有私聊用户。建议填写参与该角色模拟的用户ID。")
-    ejaculate_ml: float = Field(default=3.0, ge=0, le=20, description="每次射出量（模拟 mL），仅人为设定，不是实际测量。修改只影响新事件。")
-    vaginal_fraction: float = Field(default=0.8, ge=0, le=1, description="阴道模拟槽初始分配比例，无生理学依据。与子宫模拟槽比例之和不得超过1。")
-    uterine_fraction: float = Field(default=0.05, ge=0, le=1, description="子宫模拟槽初始分配比例，无生理学依据，不代表真实精液进入子宫。")
-    vaginal_half_life_hours: float = Field(default=6, ge=0.1, le=168, description="阴道模拟槽衰减半衰期（小时），任意游戏参数，不是精子存活时间。")
-    uterine_half_life_hours: float = Field(default=24, ge=0.1, le=168, description="子宫模拟槽衰减半衰期（小时），任意游戏参数。")
-    double_ovulation_probability: float = Field(default=0.05, ge=0, le=1, description="双卵模拟概率，默认5%为纯虚构演示参数，不是人群发生率；设为0固定单卵。每周期首次查看抽取并持久保存。")
+    allowed_user_ids: list[str] = Field(default_factory=list, description="可记录的私聊用户ID；空列表允许所有私聊用户。建议填写参与该角色状态的用户ID。")
+    ejaculate_ml: float = Field(default=3.0, ge=0, le=20, description="每次射出量（mL，配置值），不是实际测量。修改只影响新事件。")
+    vaginal_fraction: float = Field(default=0.8, ge=0, le=1, description="阴道内留存量初始分配比例，无生理学依据。与子宫内留存量比例之和不得超过1。")
+    uterine_fraction: float = Field(default=0.05, ge=0, le=1, description="子宫内留存量初始分配比例，无生理学依据，不代表真实精液进入子宫。")
+    vaginal_half_life_hours: float = Field(default=6, ge=0.1, le=168, description="阴道内留存量衰减半衰期（小时），为数值衰减参数，不是精子存活时间。")
+    uterine_half_life_hours: float = Field(default=24, ge=0.1, le=168, description="子宫内留存量衰减半衰期（小时），为数值衰减参数，不代表生理过程。")
+    double_ovulation_probability: float = Field(default=0.05, ge=0, le=1, description="双卵生成概率，默认5%为人为设定参数，不是人群发生率；设为0固定单卵。每周期首次查看抽取并持久保存。")
 
     @model_validator(mode='after')
     def validate_fractions(self):
         if self.vaginal_fraction + self.uterine_fraction > 1:
-            raise ValueError('两个模拟槽的分配比例之和不能大于1')
+            raise ValueError('两个留存模型的分配比例之和不能大于1')
         return self
 
 
@@ -46,12 +46,12 @@ class Settings(PluginConfigBase):
 
 
 class PregnancySettings(PluginConfigBase):
-    __ui_label__ = '虚构妊娠模拟'
-    auto_trigger_enabled: bool = Field(default=True, description='新记录的明确内射事件位于估算易孕窗口时触发一次角色模拟抽样，不回溯既有事件。')
-    trigger_probability: float = Field(default=0.2, ge=0, le=1, description='每条符合条件事件的虚构触发概率，默认20%是人为游戏参数，不是真实受孕率；修改不重抽历史事件。')
+    __ui_label__ = '妊娠状态'
+    auto_trigger_enabled: bool = Field(default=True, description='新记录的明确内射事件位于估算易孕窗口时触发一次角色状态抽样，不回溯既有事件。')
+    trigger_probability: float = Field(default=0.2, ge=0, le=1, description='每条符合条件事件的妊娠登记概率，默认20%是配置参数，不是真实受孕率；修改不重抽历史事件。')
     max_event_age_days: int = Field(default=7, ge=0, le=30, description='自动抽样只处理最近多少天内发生的新记录，默认7天；更早的补记仅保存历史，避免旧事件意外改变当前剧情。')
     trigger_user_ids: list[str] = Field(default_factory=list, description='可通过新私聊自述触发妊娠抽样的QQ用户；空列表时仅麦生活已启用的owner。管理员手动补记不受此列表限制。')
-    context_enabled: bool = Field(default=True, description='向授权QQ私聊的Planner和Replyer注入简短的虚构角色妊娠状态，不向群聊注入，不含性行为记录或模拟留存量。')
+    context_enabled: bool = Field(default=True, description='向授权QQ私聊的Planner和Replyer注入简短的角色妊娠状态，不向群聊注入，不含性行为记录或模型计算留存量。')
     context_user_ids: list[str] = Field(default_factory=list, description='允许接收角色妊娠上下文的QQ用户ID；空列表时仅麦生活中已启用的owner用户。')
 
 
@@ -65,7 +65,7 @@ class MaiLifeCycle(MaiBotPlugin):
         self.store = EventStore(self.ctx.paths.data_dir / "cycle_events.sqlite3")
         await asyncio.to_thread(pregnancy.initialize, self.store)
         self._private_sessions = {}
-        self.ctx.logger.info("麦生活周期日历已加载：周期只读，事件与虚构模拟独立存储")
+        self.ctx.logger.info("麦生活周期日历已加载：周期只读，事件与数值模型独立存储")
 
     async def on_unload(self):
         self._private_sessions.clear()
@@ -144,7 +144,7 @@ class MaiLifeCycle(MaiBotPlugin):
     def _settings(self):
         settings = self.config.simulation.model_dump()
         if settings['vaginal_fraction'] + settings['uterine_fraction'] > 1:
-            raise ValueError("两个模拟槽的分配比例之和不能大于1，请修改扩展的角色模拟设置")
+            raise ValueError("两个留存模型的分配比例之和不能大于1，请修改扩展的角色状态设置")
         return settings
 
     async def _read(self, key):
@@ -195,7 +195,7 @@ class MaiLifeCycle(MaiBotPlugin):
                 key = f"{data['start']}:{data['length']}"
                 eggs = await asyncio.to_thread(self.store.eggs, key, settings['double_ovulation_probability'])
                 data['eggs'] = {'cycle_total': eggs, 'released_today': eggs if (data.get('current') or {}).get('phase') == 'ovulation' else 0,
-                                'label': '本周期模拟排卵数；不代表实际卵子数。每日不重抽，不模拟卵巢储备。'}
+                                'label': '本周期排卵数（设定）；不代表实际卵子数。每日不重抽，不推断卵巢储备。'}
             # Never expose message IDs or original text in the page response.
             view = self._event_view(records[:200], state, timezone, now)
             counts = {}
@@ -263,7 +263,7 @@ class MaiLifeCycle(MaiBotPlugin):
     async def delete_event(self, event_id: int):
         return {'success': await asyncio.to_thread(self.store.delete, event_id)}
 
-    @API(name='pregnancy_set',description='手动开始或覆盖虚构妊娠模拟',version='1',public=False)
+    @API(name='pregnancy_set',description='手动开始或覆盖妊娠状态',version='1',public=False)
     async def pregnancy_set(self, anchor_date: str, fetuses: int = 1, note: str = ''):
         try:
             timezone = await self._read('environment.timezone')
@@ -272,7 +272,7 @@ class MaiLifeCycle(MaiBotPlugin):
         except ValueError as exc:
             return {'success':False,'error':str(exc)}
 
-    @API(name='pregnancy_end',description='结算分娩剧情或结束虚构妊娠/产后模拟',version='1',public=False)
+    @API(name='pregnancy_end',description='登记分娩或结束妊娠状态/产后阶段',version='1',public=False)
     async def pregnancy_end(self, outcome: str):
         try:
             timezone = await self._read('environment.timezone')

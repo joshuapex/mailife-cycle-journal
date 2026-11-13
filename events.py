@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-SIMULATION_NOTICE = "虚构角色数值：分配比例、衰减和双卵概率均为人为设定，无生理学依据。模拟槽数值不是身体内实际精液量、精子数或受孕概率。"
+SIMULATION_NOTICE = "数值依据配置比例、衰减参数和事件记录计算，不是身体测量。分配比例、半衰期及排卵数量的生成参数不代表生理指标或受孕概率。"
 
 
 def detect_report(message: dict, now: datetime, allowed_users: list[str]) -> dict | None:
@@ -179,4 +179,4 @@ def simulate(records: list[dict], now: datetime) -> dict:
             'configured_volume_total_ml': round(volume, 3), 'event_count': len(records),
             'internal_count': internal_count, 'notice': SIMULATION_NOTICE,
             'actual_retained_volume': '无法从聊天或配置估算',
-            'time_note': '明确时间使用该时刻；仅自述日期时，当天从记录时刻启动模拟，往日从该日00:00启动。这是游戏计算约定。'}
+            'time_note': '明确时间使用该时刻；仅自述日期时，当天从记录时刻启动模型计算，往日从该日00:00启动。这是游戏计算约定。'}

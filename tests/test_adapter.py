@@ -56,12 +56,12 @@ class ContextTests(unittest.IsolatedAsyncioTestCase):
     def remember(self,user='owner',group=None,session='s'):
         adapter.MaiLifeCycle._remember_private_session(self.instance,{'session_id':session,'platform':'qq','message_info':{'group_info':group,'user_info':{'user_id':user}}})
 
-    async def test_only_authorized_private_session_gets_fictional_state(self):
-        self.remember();text=await self.instance._pregnancy_context('s');self.assertIn('模拟孕周10周',text)
+    async def test_only_authorized_private_session_gets_character_state(self):
+        self.remember();text=await self.instance._pregnancy_context('s');self.assertIn('孕周10周',text)
         self.assertNotIn('mL',text)
         self.remember(group={'group_id':'g'});self.assertEqual(await self.instance._pregnancy_context('s'),'')
         self.remember(user='other');self.assertEqual(await self.instance._pregnancy_context('s'),'')
-        self.instance.config.pregnancy.context_user_ids=['other'];self.assertIn('模拟孕周',await self.instance._pregnancy_context('s'))
+        self.instance.config.pregnancy.context_user_ids=['other'];self.assertIn('孕周',await self.instance._pregnancy_context('s'))
         self.instance.config.pregnancy.context_enabled=False;self.assertEqual(await self.instance._pregnancy_context('s'),'')
 
     async def test_both_context_hooks_preserve_existing_content_and_deduplicate(self):

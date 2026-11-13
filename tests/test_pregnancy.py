@@ -52,7 +52,7 @@ class PregnancyTests(unittest.TestCase):
 
     def test_stage_boundaries_due_date_and_no_automatic_delivery(self):
         anchor='2026-01-01'
-        for days,phase in [(97,'孕早期模拟'),(98,'孕中期模拟'),(195,'孕中期模拟'),(196,'孕晚期模拟'),(280,'等待手动结算')]:
+        for days,phase in [(97,'孕早期'),(98,'孕中期'),(195,'孕中期'),(196,'孕晚期'),(280,'待登记分娩')]:
             now=datetime(2026,1,1,12,tzinfo=NOW.tzinfo)+timedelta(days=days)
             pregnancy.set_manual(self.store,anchor,2,'自定义角色状态',now)
             d=pregnancy.snapshot(self.store,now)
@@ -75,12 +75,12 @@ class PregnancyTests(unittest.TestCase):
         self.assertIsNone(d['current']);self.assertFalse(d['calendar_paused'])
         self.assertIn('已结束',pregnancy.context_text(d))
 
-    def test_invalid_manual_inputs_and_context_is_fictional(self):
+    def test_invalid_manual_inputs_and_context_is_character_data(self):
         for args in [('2026-11-14',1,''),('2026-02-30',1,''),('2026-11-01',3,''),('2026-11-01',True,''),('2026-11-01',1,'x'*301)]:
             with self.assertRaises(ValueError):pregnancy.set_manual(self.store,*args,NOW)
         pregnancy.set_manual(self.store,'2026-11-01',1,'更喜欢安静的日常',NOW)
         text=pregnancy.context_text(pregnancy.snapshot(self.store,NOW))
-        self.assertIn('虚拟角色本人的设定',text)
+        self.assertIn('角色扮演背景',text)
         self.assertIn('不是用户的身体状态',text)
         self.assertNotIn('source_key',text)
         self.assertNotIn('mL',text)

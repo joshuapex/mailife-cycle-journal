@@ -20,17 +20,17 @@
         "anchor_date": {"type": "string", "required": true, "max_length": 10},
         "fetuses": {"type": "integer", "required": true, "minimum": 1, "maximum": 2},
         "note": {"type": "string", "max_length": 300}
-      }, "confirmation": "确认开始或覆盖虚构妊娠状态？原进行中记录会保留为已结束历史。"},
+      }, "confirmation": "确认开始或覆盖妊娠状态状态？原进行中记录会保留为已结束历史。"},
       "pregnancy_end": {"api": "pregnancy_end", "version": "1", "parameters": {
         "outcome": {"type": "string", "required": true, "choices": ["delivered", "ended"]}
-      }, "confirmation": "确认结算当前虚构妊娠或产后状态？这不是现实医疗操作。"},
+      }, "confirmation": "确认结算当前妊娠状态或产后状态？这不是现实医疗操作。"},
       "record": {"api": "record_event", "version": "1", "parameters": {
         "occurred_at": {"type": "string", "required": true, "max_length": 32},
         "kind": {"type": "string", "required": true, "choices": ["internal", "unprotected", "protected", "unspecified"]}
-      }, "confirmation": "确认补记这条自述事件？只有明确内射事件会加入虚构模拟槽。"},
+      }, "confirmation": "确认补记这条自述事件？只有明确内射事件会加入留存模型。"},
       "delete": {"api": "delete_event", "version": "1", "parameters": {
         "event_id": {"type": "integer", "required": true, "minimum": 1}
-      }, "confirmation": "确认删除这条事件？对应模拟量将同时移除；已触发的虚构妊娠需在妊娠卡中另行结束。"}
+      }, "confirmation": "确认删除这条事件？对应配置量将同时移除；已触发的妊娠状态需在妊娠卡中另行结束。"}
     }
   }]
 }
