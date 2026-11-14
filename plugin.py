@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import re
 import secrets
 import time
+from collections import OrderedDict, deque
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pydantic import model_validator
@@ -12,6 +16,7 @@ from maibot_sdk.types import ErrorPolicy, HookMode, HookOrder
 from .cycle import make_snapshot
 from .events import EventStore, detect_report, simulate
 from . import pregnancy
+from . import journal
 
 MAILIFE_ID = "maibot-community.mai-life"
 
@@ -25,6 +30,10 @@ class SimulationSettings(PluginConfigBase):
     __ui_label__ = "身体状态与事件"
     capture_private_reports: bool = Field(default=True, description="识别私聊中第一人称、已发生的明确自述；忽略疑问、否定、假设、引用和群聊。不保存原始聊天文本。")
     allowed_user_ids: list[str] = Field(default_factory=list, description="可记录的私聊用户ID；空列表允许所有私聊用户。建议填写参与该角色状态的用户ID。")
+    context_capture_enabled: bool = Field(default=True, description="结合近期用户消息和成功发送的机器人回复识别已发生事件；后台调用模型，不阻塞QQ回复。不保存对话正文，不自动回填历史。")
+    context_task_name: str = Field(default='planner', description="事件提取使用的宿主模型任务名，默认planner；每次相关用户消息至多调用一次。")
+    context_window_minutes: int = Field(default=30, ge=5, le=120, description="同一私聊的上下文和事件合并窗口（分钟）。")
+    context_timeout_seconds: int = Field(default=25, ge=5, le=60, description="后台事件提取的单次超时（秒）；失败仅记诊断，不猜测记录。")
     ejaculate_ml: float = Field(default=3.0, ge=0, le=20, description="每次射出量（mL，配置值），不是实际测量。修改只影响新事件。")
     vaginal_fraction: float = Field(default=0.8, ge=0, le=1, description="阴道内留存量初始分配比例，无生理学依据。与子宫内留存量比例之和不得超过1。")
     uterine_fraction: float = Field(default=0.05, ge=0, le=1, description="子宫内留存量初始分配比例，无生理学依据，不代表真实精液进入子宫。")
@@ -64,14 +73,24 @@ class MaiLifeCycle(MaiBotPlugin):
     async def on_load(self):
         self.store = EventStore(self.ctx.paths.data_dir / "cycle_events.sqlite3")
         await asyncio.to_thread(pregnancy.initialize, self.store)
+        await asyncio.to_thread(journal.initialize, self.store)
         self._private_sessions = {}
+        self._contexts = OrderedDict()
+        self._journal_queue = asyncio.Queue(maxsize=32)
+        self._journal_notices = deque(maxlen=30)
+        self._journal_worker = asyncio.create_task(self._journal_loop())
         self.ctx.logger.info("麦生活周期日历已加载：周期只读，事件与数值模型独立存储")
 
     async def on_unload(self):
+        self._journal_worker.cancel()
+        await asyncio.gather(self._journal_worker, return_exceptions=True)
+        self._contexts.clear()
         self._private_sessions.clear()
 
     async def on_config_update(self, scope, config_data, version):
-        pass
+        # In-flight jobs carry an epoch and cannot commit after a settings change.
+        self._contexts.clear()
+        self._journal_epoch = getattr(self, '_journal_epoch', 0) + 1
 
     def _remember_private_session(self, message):
         if not isinstance(message,dict):
@@ -177,6 +196,8 @@ class MaiLifeCycle(MaiBotPlugin):
             now = datetime.now(ZoneInfo(timezone))
             result['items'] = self._event_view(result['items'], state, timezone, now)
             result['timezone'] = timezone
+            result['diagnostics'] = sorted([*(await asyncio.to_thread(journal.diagnostics, self.store)),
+                *getattr(self,'_journal_notices',[])],key=lambda item:item['at'],reverse=True)[:30]
             return {'success': True, 'data': result}
         except (ValueError, RuntimeError) as exc:
             return {'success': False, 'error': str(exc)}
@@ -220,6 +241,9 @@ class MaiLifeCycle(MaiBotPlugin):
         self._remember_private_session(message)
         if not self.config.plugin.enabled or not self.config.simulation.capture_private_reports:
             return {"action": "continue"}
+        if self.config.simulation.context_capture_enabled:
+            self._queue_context_message(message, 'user')
+            return {"action": "continue"}
         if not isinstance(message, dict) or not any(word in str(message.get('processed_plain_text') or '') for word in
                 ('内射', '射精', '射在', '无保护', '避孕', '无套', '戴套', '性行为', '性交', '同房', '做爱', '发生关系', '发生了关系')):
             return {"action": "continue"}
@@ -236,6 +260,117 @@ class MaiLifeCycle(MaiBotPlugin):
             # Avoid logging the message, user identity, or intimate event content.
             self.ctx.logger.warning("周期事件未记录，请检查扩展设置或存储状态")
         return {"action": "continue"}
+
+    @HookHandler('send_service.after_send', mode=HookMode.OBSERVE, error_policy=ErrorPolicy.SKIP)
+    async def capture_sent_context(self, message=None, sent=False, **kwargs):
+        if sent and self.config.plugin.enabled and self.config.simulation.capture_private_reports and self.config.simulation.context_capture_enabled:
+            self._queue_context_message(message, 'assistant')
+
+    def _queue_context_message(self, message, role):
+        if not isinstance(message, dict):
+            return
+        info = message.get('message_info') or {}
+        if info.get('group_info') is not None or message.get('is_notify') or info.get('is_notify'):
+            return
+        session = str(message.get('session_id') or '')
+        platform = str(message.get('platform') or info.get('platform') or '')
+        actor = self._private_sessions.get(session)
+        if platform != 'qq' or not actor or actor['platform'] != 'qq':
+            return
+        allowed = self.config.simulation.allowed_user_ids
+        if allowed and actor['user_id'] not in allowed:
+            return
+        if role == 'user' and str((info.get('user_info') or {}).get('user_id') or '') != actor['user_id']:
+            return
+        text = str(message.get('processed_plain_text') or '').strip()
+        ident = str(message.get('message_id') or info.get('message_id') or '')
+        if not text or not ident or message.get('reply_to') and role == 'user':
+            return
+        if len(text) > 1000:
+            # Never truncate away a later negation and classify the prefix alone.
+            return
+        key = journal.actor_key(platform, actor['user_id'], session)
+        limit = self.config.simulation.context_window_minutes * 60
+        current = time.monotonic()
+        context = self._contexts.setdefault(key, deque(maxlen=16))
+        while context and current-context[0]['seen'] > limit:
+            context.popleft()
+        source = hashlib.sha256((key+':'+role+':'+ident).encode()).hexdigest()
+        if any(m['source'] == source for m in context):
+            return
+        context.append({'role':role, 'text':text[:1000], 'source':source, 'seen':current})
+        self._contexts.move_to_end(key)
+        while len(self._contexts) > 128:
+            self._contexts.popitem(last=False)
+        # Delivered bot segments inform the next user turn; they never trigger a
+        # model call or create an event on their own.
+        if role != 'user':
+            return
+        relevant = re.compile(r'内射|射精|射在|射进|射了|无保护|避孕|无套|戴套|性行为|性交|同房|做爱|发生.{0,2}关系|做完|结束了|事后')
+        if not any(relevant.search(m['text']) for m in context):
+            return
+        messages = [{'role':m['role'], 'text':m['text']} for m in context]
+        job = {'source':source, 'actor':key, 'user_id':actor['user_id'], 'platform':platform,
+               'messages':messages, 'epoch':getattr(self,'_journal_epoch',0)}
+        try:
+            self._journal_queue.put_nowait(job)
+        except asyncio.QueueFull:
+            self._journal_notices.append({'at':datetime.now().astimezone().isoformat(),'reason':'queue_full','label':journal.REASONS['queue_full']})
+            self.ctx.logger.warning('周期事件后台队列已满，未分析此消息')
+
+    async def _journal_loop(self):
+        while True:
+            job = await self._journal_queue.get()
+            try:
+                if job['epoch'] != getattr(self, '_journal_epoch', 0):
+                    continue
+                await self._analyze_context(job)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self._journal_notices.append({'at':datetime.now().astimezone().isoformat(),'reason':'storage_error','label':journal.REASONS['storage_error']})
+                # Do not log exception bodies: model/provider errors can echo text.
+                self.ctx.logger.warning('周期事件后台处理失败，请查看识别诊断或存储状态')
+            finally:
+                self._journal_queue.task_done()
+
+    async def _analyze_context(self, job):
+        cfg = self.config.simulation
+        if not self.config.plugin.enabled or not cfg.capture_private_reports or not cfg.context_capture_enabled:
+            return
+        timezone = await self._read('environment.timezone')
+        now = datetime.now(ZoneInfo(timezone))
+        existing = await asyncio.to_thread(journal.recent_events,self.store,job['actor'],now,cfg.context_window_minutes)
+        try:
+            async with asyncio.timeout(cfg.context_timeout_seconds):
+                response = await self.ctx.llm.generate(model='',task_name=cfg.context_task_name,
+                    prompt=[{'role':'system','content':journal.SYSTEM},
+                            {'role':'user','content':journal.make_prompt(job['messages'],existing,now)}],
+                    temperature=0)
+            if not isinstance(response,dict) or not response.get('success') or not response.get('response'):
+                raise RuntimeError('model_error')
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await asyncio.to_thread(journal.diagnose,self.store,job['source'],job['actor'],'model_error',now)
+            return
+        try:
+            result = journal.validate(response['response'],job['messages'],existing,now)
+        except (ValueError,TypeError,KeyError,StopIteration):
+            await asyncio.to_thread(journal.diagnose,self.store,job['source'],job['actor'],'invalid_response',now)
+            return
+        if job['epoch'] != getattr(self, '_journal_epoch', 0):
+            return
+        latest = next(m['text'] for m in reversed(job['messages']) if m['role']=='user')
+        result['explicit_new_round'] = bool(re.search(r'再一次|又一次|第二次|第三次|新一轮|又.{0,8}(射了|内射了|做完|结束)',latest))
+        applied = await asyncio.to_thread(journal.apply,self.store,job['source'],job['actor'],result,self._settings(),now,existing)
+        report = applied['report']
+        if report and report['kind']=='internal':
+            report['eligible_actor'] = await self._allowed_actor(job['user_id'],job['platform'],self.config.pregnancy.trigger_user_ids)
+            state = await self._read('state')
+            cycle = make_snapshot(state,timezone,today=datetime.fromisoformat(report['event_date']).date())
+            await asyncio.to_thread(pregnancy.attempt,self.store,report,cycle,self.config.pregnancy.model_dump(),now)
+        self.ctx.logger.info('周期事件识别结果：%s',journal.REASONS[applied['reason']])
 
     @API(name="record_event", description="管理员手动补记自述事件", version="1", public=False)
     async def record_event(self, occurred_at: str, kind: str):
@@ -263,6 +398,15 @@ class MaiLifeCycle(MaiBotPlugin):
     async def delete_event(self, event_id: int):
         return {'success': await asyncio.to_thread(self.store.delete, event_id)}
 
+    @API(name='correct_event', description='纠正已有事件类型和日期，不重新抽样妊娠状态', version='1', public=False)
+    async def correct_event(self, event_id: int, kind: str, event_date: str):
+        try:
+            timezone = await self._read('environment.timezone')
+            await asyncio.to_thread(self.store.correct,event_id,kind,event_date,datetime.now(ZoneInfo(timezone)))
+            return {'success':True}
+        except ValueError as exc:
+            return {'success':False,'error':str(exc)}
+
     @API(name='pregnancy_set',description='手动开始或覆盖妊娠状态',version='1',public=False)
     async def pregnancy_set(self, anchor_date: str, fetuses: int = 1, note: str = ''):
         try:
@@ -284,3 +428,4 @@ class MaiLifeCycle(MaiBotPlugin):
 
 def create_plugin():
     return MaiLifeCycle()
+

@@ -103,7 +103,11 @@ class EventStore:
             timestamp = datetime.combine(date.fromisoformat(item['event_date']), datetime.min.time(), tzinfo=now.tzinfo)
         item['simulation_started_at'] = timestamp.isoformat()
         with self.connect() as db:
-            result = db.execute("INSERT OR IGNORE INTO events(source_key,payload) VALUES (?,?)", (item['source_key'], json.dumps(item)))
+            db.execute('BEGIN IMMEDIATE')
+            journal_exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='journal_decisions'").fetchone()
+            query = 'SELECT COALESCE(MAX(id),0)+1 FROM events' if not journal_exists else 'SELECT COALESCE(MAX(id),0)+1 FROM (SELECT id FROM events UNION ALL SELECT event_id AS id FROM journal_decisions WHERE event_id IS NOT NULL)'
+            ident = db.execute(query).fetchone()[0]
+            result = db.execute("INSERT OR IGNORE INTO events(id,source_key,payload) VALUES (?,?,?)", (ident,item['source_key'], json.dumps(item)))
             return result.rowcount == 1
 
     def records(self):
@@ -122,7 +126,7 @@ class EventStore:
             raise ValueError('开始日期不能晚于结束日期')
         if kind not in {'', 'internal', 'unprotected', 'protected', 'unspecified'}:
             raise ValueError('事件类型筛选无效')
-        if origin not in {'', 'private_self_report', 'manual_self_report'}:
+        if origin not in {'', 'private_self_report', 'manual_self_report', 'chat_inferred'}:
             raise ValueError('事件来源筛选无效')
         clauses, values = [], []
         for field, op, value in [('event_date','>=',start_date),('event_date','<=',end_date),('kind','=',kind),('origin','=',origin)]:
@@ -147,7 +151,32 @@ class EventStore:
         if isinstance(event_id, bool) or not isinstance(event_id, int) or event_id < 1:
             raise ValueError('事件编号无效')
         with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT payload FROM events WHERE id=?',(event_id,)).fetchone()
+            if row:
+                item = json.loads(row[0])
+                # Retain only reconciliation metadata, never raw conversation.
+                tombstone = {k:item[k] for k in ('kind','event_date','recorded_at')}
+                db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',(f'journal_deleted:{event_id}',json.dumps(tombstone)))
             return db.execute('DELETE FROM events WHERE id=?', (event_id,)).rowcount == 1
+
+    def correct(self, event_id, kind, event_date, now):
+        if type(event_id) is not int or event_id < 1 or kind not in {'internal','unprotected','protected','unspecified'}:
+            raise ValueError('事件编号或类型无效')
+        if not isinstance(event_date,str) or len(event_date)!=10 or date.fromisoformat(event_date).isoformat()!=event_date or date.fromisoformat(event_date)>now.date():
+            raise ValueError('日期须为今天或之前的YYYY-MM-DD')
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute('SELECT payload FROM events WHERE id=?',(event_id,)).fetchone()
+            if not row:
+                raise ValueError('事件不存在或已删除')
+            item=json.loads(row[0])
+            if item['event_date']!=event_date:
+                item.update(event_date=event_date,precision='reported_date',simulation_started_at=(now if event_date==now.date().isoformat() else datetime.combine(date.fromisoformat(event_date),datetime.min.time(),tzinfo=now.tzinfo)).isoformat())
+                item.pop('occurred_at',None)
+            item.update(kind=kind,updated_at=now.isoformat(),correction_origin='manual')
+            db.execute('UPDATE events SET payload=? WHERE id=?',(json.dumps(item),event_id))
+        return True
 
     def eggs(self, key: str, double_probability: float) -> int:
         with self.connect() as db:
@@ -180,3 +209,4 @@ def simulate(records: list[dict], now: datetime) -> dict:
             'internal_count': internal_count, 'notice': SIMULATION_NOTICE,
             'actual_retained_volume': '无法从聊天或配置估算',
             'time_note': '明确时间使用该时刻；仅自述日期时，当天从记录时刻启动模型计算，往日从该日00:00启动。这是游戏计算约定。'}
+
