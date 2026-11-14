@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "id": "local.mailife-cycle",
   "name": "麦生活 · 周期日历",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "麦生活独立扩展：周期分层日历、私聊自述历史、角色状态与妊娠状态，以及授权私聊的角色上下文。",
   "author": {
     "name": "joshuapex",
@@ -29,7 +29,8 @@
     }
   ],
   "capabilities": [
-    "config.get_plugin"
+    "config.get_plugin",
+    "llm.generate"
   ],
   "i18n": {
     "default_locale": "zh-CN",
